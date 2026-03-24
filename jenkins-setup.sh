@@ -14,6 +14,15 @@ if ! grep -iq "ID=ubuntu" /etc/os-release; then
     exit 1
 fi
 
+# Clean all old Jenkins repo entries and GPG keys to prevent conflicts
+sudo rm -f /etc/apt/sources.list.d/jenkins*.list
+sudo rm -f /etc/apt/sources.list.d/jenkins*.sources
+sudo rm -f /usr/share/keyrings/jenkins*.asc /usr/share/keyrings/jenkins*.gpg
+sudo rm -f /etc/apt/trusted.gpg.d/jenkins*.gpg /etc/apt/trusted.gpg.d/jenkins*.asc
+sudo apt-key del "$(apt-key list 2>/dev/null | grep -B1 -i jenkins | head -1 | awk '{print $NF}')" 2>/dev/null || true
+# Remove Jenkins entries from /etc/apt/sources.list if present
+sudo sed -i '/pkg\.jenkins\.io/d' /etc/apt/sources.list 2>/dev/null || true
+
 # Update and install prerequisites
 echo ">>> Updating system and installing required tools..."
 sudo apt-get update -y
@@ -37,16 +46,25 @@ sudo update-alternatives --set javac /usr/lib/jvm/java-17-openjdk-amd64/bin/java
 echo ">>> Java version:"
 java -version
 
-# Add Jenkins GPG key and repo (Updated to new 2023 key)
-echo ">>> Adding Jenkins GPG key and repository..."
-curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key | sudo tee /usr/share/keyrings/jenkins-keyring.asc > /dev/null
-echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" \
-  | sudo tee /etc/apt/sources.list.d/jenkins.list > /dev/null
+# Install Jenkins via direct .deb download (no GPG key or repo needed)
+echo ">>> Downloading and installing Jenkins directly..."
+JENKINS_DEB="/tmp/jenkins.deb"
 
-# Update and install Jenkins
-echo ">>> Installing Jenkins..."
-sudo apt-get update -y
-sudo apt-get install -y jenkins
+# Fetch the latest stable Jenkins .deb filename from the download mirror
+JENKINS_DEB_URL=$(curl -fsSL "https://get.jenkins.io/debian-stable/" \
+  | grep -oP 'href="\Kjenkins_[0-9]+\.[0-9]+\.[0-9]+_all\.deb' \
+  | sort -V | tail -1)
+
+if [ -z "$JENKINS_DEB_URL" ]; then
+    echo "❌ Could not determine latest Jenkins .deb URL. Falling back to known version."
+    JENKINS_DEB_URL="jenkins_2.541.3_all.deb"
+fi
+
+echo ">>> Downloading: https://get.jenkins.io/debian-stable/${JENKINS_DEB_URL}"
+curl -fSL "https://get.jenkins.io/debian-stable/${JENKINS_DEB_URL}" -o "$JENKINS_DEB"
+
+sudo dpkg -i "$JENKINS_DEB" || sudo apt-get install -f -y
+rm -f "$JENKINS_DEB"
 
 # Configure Jenkins to use Java 17
 echo ">>> Setting JAVA_HOME in /etc/default/jenkins..."
